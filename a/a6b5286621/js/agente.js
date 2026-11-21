@@ -1,0 +1,229 @@
+// @ts-check
+// "Tu agente": el menu de beneficios y sus mini videos. Aqui vive lo que se decide sin tocar la pantalla (cual
+// beneficio esta abierto, si su mini video corre y que dice su boton) y se prueba sin navegador. Pintar es de
+// agente-vista.js, y el movimiento de cada escena, de los estilos: animaciones con el retraso que dicen los datos.
+
+/** @typedef {'espera' | 'sigue' | 'fin'} Fase */
+/**
+ * @typedef {object} Estado
+ * @property {number} abierto  el beneficio abierto, desde cero: siempre hay uno
+ * @property {Fase} fase  espera: su mini video aun no empieza (el primero, hasta que la seccion llega a la vista);
+ *   sigue: ya empezo y no ha terminado; fin: se quedo en su ultimo cuadro
+ * @property {boolean} pausado  la visitante lo detuvo con el boton
+ * @property {boolean} aLaVista  el mini video abierto se ve en la pantalla
+ * @property {boolean} quieto  la visitante pidio menos movimiento: nada corre, cada escena es su ultimo cuadro
+ * @property {number} vuelta  las veces que ha empezado un mini video: cuando cambia, la vista lo arranca desde cero
+ */
+/**
+ * @typedef {{ tipo: 'elige', cual: number } | { tipo: 'boton' } | { tipo: 'termina' } | { tipo: 'busca' }
+ *   | { tipo: 'vista', aLaVista: boolean } | { tipo: 'quieto', quieto: boolean }} Evento
+ */
+/** @typedef {'pausar' | 'reproducir' | 'verDeNuevo'} Boton */
+
+/**
+ * Como llega la seccion: el primer beneficio abierto y su mini video esperando a que la visitante lo vea.
+ * @param {{ abierto?: number, quieto?: boolean }} [como]
+ * @returns {Estado}
+ */
+export function estadoInicial({ abierto = 0, quieto = false } = {}) {
+  return { abierto, fase: quieto ? 'fin' : 'espera', pausado: false, aLaVista: false, quieto, vuelta: 0 };
+}
+
+/**
+ * El mini video abierto empieza desde cero. Con menos movimiento no hay nada que correr: se pinta su ultimo cuadro.
+ * @param {Estado} estado
+ * @returns {Estado}
+ */
+function empezar(estado) {
+  if (estado.quieto) return { ...estado, fase: 'fin', pausado: false };
+  return { ...estado, fase: 'sigue', pausado: false, vuelta: estado.vuelta + 1 };
+}
+
+/**
+ * El estado que sigue. Si el evento no cambia nada devuelve el mismo objeto: asi la vista sabe que no hay que pintar.
+ * @param {Estado} estado
+ * @param {Evento} evento
+ * @param {number} [cuantos]  los beneficios que hay
+ * @returns {Estado}
+ */
+export function avanzar(estado, evento, cuantos = Number.POSITIVE_INFINITY) {
+  switch (evento.tipo) {
+    case 'elige':
+      // Elegir el que ya esta abierto lo vuelve a correr: nunca se queda el menu sin un beneficio abierto.
+      if (!Number.isInteger(evento.cual) || evento.cual < 0 || evento.cual >= cuantos) return estado;
+      return empezar({ ...estado, abierto: evento.cual });
+    case 'boton':
+      if (estado.quieto) return estado;
+      return estado.fase === 'sigue' ? { ...estado, pausado: !estado.pausado } : empezar(estado);
+    case 'termina':
+      return estado.fase === 'sigue' ? { ...estado, fase: 'fin', pausado: false } : estado;
+    case 'vista': {
+      if (evento.aLaVista === estado.aLaVista) return estado;
+      const visto = { ...estado, aLaVista: evento.aLaVista };
+      // El primero corre solo, una vez, cuando la seccion llega a la vista.
+      return evento.aLaVista && estado.fase === 'espera' ? empezar(visto) : visto;
+    }
+    case 'busca':
+      // La visitante movio la linea de avance. Si el mini video ya corre (o esta en pausa) sigue como estaba y solo
+      // cambia de instante; si esperaba o ya habia terminado, empieza, y la vista lo lleva a donde ella apunto.
+      if (estado.quieto) return estado;
+      return estado.fase === 'sigue' ? estado : empezar(estado);
+    case 'quieto':
+      if (evento.quieto === estado.quieto) return estado;
+      return evento.quieto ? { ...estado, quieto: true, fase: 'fin', pausado: false } : { ...estado, quieto: false };
+    default:
+      return estado;
+  }
+}
+
+/**
+ * Si el mini video abierto esta corriendo en este instante: ya empezo, nadie lo pauso y se ve.
+ * @param {Estado} estado
+ * @returns {boolean}
+ */
+export function anda(estado) {
+  return estado.fase === 'sigue' && !estado.pausado && estado.aLaVista;
+}
+
+/**
+ * Lo que hace el boton de la barra del mini video.
+ * @param {Estado} estado
+ * @returns {Boton}
+ */
+export function botonDe(estado) {
+  if (estado.fase === 'fin') return 'verDeNuevo';
+  return estado.pausado ? 'reproducir' : 'pausar';
+}
+
+/**
+ * El instante del mini video, en segundos, al que lleva una tecla desde su linea de avance: las flechas adelantan o
+ * regresan un segundo, Inicio y Fin van a las orillas. Con cualquier otra tecla no hay a donde ir: null.
+ * @param {string} tecla  la tecla, como la nombra el navegador ("ArrowRight", "Home"...)
+ * @param {number} va  por donde va el mini video, en segundos
+ * @param {number} dura  lo que dura, en segundos
+ * @returns {number | null}
+ */
+export function instanteCon(tecla, va, dura) {
+  switch (tecla) {
+    case 'ArrowRight':
+    case 'ArrowUp':
+      return Math.min(dura, va + 1);
+    case 'ArrowLeft':
+    case 'ArrowDown':
+      return Math.max(0, va - 1);
+    case 'Home':
+      return 0;
+    case 'End':
+      return dura;
+    default:
+      return null;
+  }
+}
+
+/** En pausa la linea de avance no llega hasta el final: se queda este instante antes, en segundos. */
+const ORILLA = 0.05;
+/** Lo que un dedo se mueve de lado, en puntos, para que se entienda que arrastra la linea de avance. */
+const ARRASTRE = 8;
+
+/**
+ * El instante al que de veras se lleva el mini video: dentro de lo que dura, y en pausa nunca hasta el final (al
+ * llegar terminaria solo, y al regresar la linea ya no estaria en pausa).
+ * @param {number} segundos  a donde apunto la visitante
+ * @param {number} dura  lo que dura, en segundos
+ * @param {boolean} pausado
+ * @returns {number}
+ */
+export function instanteEn(segundos, dura, pausado) {
+  return Math.min(Math.max(segundos, 0), pausado ? dura - ORILLA : dura);
+}
+
+/**
+ * El segundo que dice la linea de avance a quien no la ve. El total solo lo dice cuando el mini video ya termino.
+ * @param {number} segundos  por donde va
+ * @param {number} dura  lo que dura, en segundos
+ * @param {boolean} termino
+ * @returns {number}
+ */
+export function segundoDicho(segundos, dura, termino) {
+  return termino ? dura : Math.min(Math.round(segundos), dura - 1);
+}
+
+/**
+ * El dedo que toco la linea de avance ya la arrastra? Mientras no, puede ser que solo vaya a recorrer la pagina.
+ * @param {number} desde  donde toco, a lo ancho
+ * @param {number} hasta  donde va
+ * @returns {boolean}
+ */
+export function yaArrastra(desde, hasta) {
+  return Math.abs(hasta - desde) >= ARRASTRE;
+}
+
+/**
+ * Lo que dura un mini video, como lo dice un reproductor: "0:07".
+ * @param {number} segundos
+ * @returns {string}
+ */
+export function reloj(segundos) {
+  const enteros = Math.max(0, Math.round(segundos));
+  return `${Math.floor(enteros / 60)}:${String(enteros % 60).padStart(2, '0')}`;
+}
+
+/**
+ * El capitulo al que lleva una tecla desde una pestana del selector: las flechas de lado pasan al de al lado y dan la
+ * vuelta, Inicio y Fin van al primero y al ultimo. Cualquier otra tecla deja el mismo: las flechas de arriba y abajo
+ * no cambian de capitulo (las pestanas van en renglon), siguen recorriendo la pagina.
+ * @param {string} tecla  la tecla, como la nombra el navegador ("ArrowRight", "Home"...)
+ * @param {number} lugar  el capitulo de la pestana que tiene el foco, desde cero
+ * @param {number} cuantos  los capitulos que hay
+ * @returns {number}
+ */
+export function capituloCon(tecla, lugar, cuantos) {
+  if (!Number.isInteger(cuantos) || cuantos < 1) return lugar;
+  switch (tecla) {
+    case 'ArrowRight':
+      return (lugar + 1) % cuantos;
+    case 'ArrowLeft':
+      return (lugar - 1 + cuantos) % cuantos;
+    case 'Home':
+      return 0;
+    case 'End':
+      return cuantos - 1;
+    default:
+      return lugar;
+  }
+}
+
+/**
+ * Cuanto hay que bajar la pagina para que quepa lo que se acaba de abrir, sin que su renglon se esconda por arriba.
+ * @param {{ arriba: number, abajo: number, techo: number, piso: number }} medidas  donde empieza y termina lo
+ *   abierto, y la parte de la pantalla que se ve (bajo la barra de arriba y sobre la de abajo)
+ * @returns {number}
+ */
+export function cuantoBajar({ arriba, abajo, techo, piso }) {
+  return Math.max(0, Math.min(abajo - piso, arriba - techo));
+}
+
+/**
+ * Cuanto hay que recorrer la pagina, en computadora, para que el escenario del mini video recien elegido se vea
+ * entero. Si su orilla de arriba quedo escondida (el menu se recorrio hasta sus ultimos renglones y el escenario ya
+ * iba de salida), la pagina sube lo que le falta: el numero es negativo. Si lo que no cabe es su parte de abajo, baja
+ * lo justo, sin esconderle la de arriba.
+ * @param {{ arriba: number, abajo: number, techo: number, piso: number }} medidas  donde empieza y termina el
+ *   escenario, donde se queda pegado bajo la barra de la pagina (techo) y donde acaba la pantalla (piso)
+ * @returns {number}
+ */
+export function cuantoRecorrer({ arriba, abajo, techo, piso }) {
+  if (arriba < techo) return arriba - techo;
+  return cuantoBajar({ arriba, abajo, techo, piso });
+}
+
+/**
+ * Lo alto que hay que apartarle al menu en computadora para que nada brinque al cambiar de beneficio: sus renglones
+ * y la oracion mas larga, este abierta o no.
+ * @param {number[]} renglones  lo alto de cada renglon, sin su oracion
+ * @param {number[]} oraciones  lo alto de cada oracion
+ * @returns {number}
+ */
+export function altoDelMenu(renglones, oraciones) {
+  return renglones.reduce((suma, alto) => suma + alto, 0) + Math.max(0, ...oraciones);
+}

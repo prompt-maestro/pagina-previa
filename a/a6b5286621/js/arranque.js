@@ -1,0 +1,90 @@
+// @ts-check
+// Corre antes de pintar. Marca que hay JavaScript para que el corto del inicio y la demostracion se vean vivos desde
+// el primer instante. Cuando pagina.js avisa que ya monto lo que pudo, a la pieza que no arranco (su
+// archivo no llego, o trono) se le quita su marca y se ensena como sin JavaScript: del inicio queda su cartel y la
+// demostracion, escrita.
+const raiz = document.documentElement;
+raiz.classList.add('con-js', 'con-corto');
+
+// Con ahorro de datos, o con una conexion lenta, el corto no corre solo ni se pide nada suyo: queda el cartel, con su
+// boton para verlo. Se anota en <html> desde ahora: lo leen los estilos y corto-vista.js.
+const conexion = /** @type {{ saveData?: boolean, effectiveType?: string } | undefined} */ (
+  Reflect.get(navigator, 'connection')
+);
+const ahorro = Boolean(conexion?.saveData) || /^(slow-2g|2g|3g)$/.test(conexion?.effectiveType ?? '');
+if (ahorro) raiz.setAttribute('data-ahorro', '');
+
+// El inicio ensena UN oficio, al azar en cada visita (no rota solo con el tiempo): el cartel en celular y el corto en
+// pantallas anchas. Los oficios que hay los dice la propia etiqueta de este archivo, y el elegido queda escrito en
+// <html> desde ahora: antes de que exista la primera escena. Cada escena (la del cartel y las del corto) se guarda o
+// se ensena en cuanto el navegador la lee, asi que nunca se pinta una para cambiarla por otra. Sin JavaScript se ve
+// la primera.
+//
+// OJO: este archivo NO escucha "DOMContentLoaded" ni "load". En la tarea en que llegan esos dos avisos el navegador
+// puede acomodar la pagina entera por primera vez (lo mas pesado de la carga), y quien mide la velocidad le cuelga
+// esa tarea completa al archivo que tenga algo escuchando ahi: la cuenta como si hubiera esperado a que este archivo
+// terminara de bajar, ya despues del primer pintado.
+const etiqueta = document.currentScript;
+const oficios = (etiqueta?.dataset.oficios ?? '').split(' ').filter(Boolean);
+const elegido = oficios[Math.floor(Math.random() * oficios.length)];
+/** Deja de vigilar lo que el navegador va leyendo (si es que se vigila algo). */
+let soltar = () => {};
+if (elegido) {
+  raiz.dataset.oficio = elegido;
+  const acomodar = () => {
+    // La etiqueta de este archivo tambien dice "data-escena" (las fotos que se adelantan): esa no es una escena.
+    for (const escena of document.querySelectorAll('[data-duo], [data-escena]:not(script)')) {
+      const suyo = escena.getAttribute('data-duo') ?? escena.getAttribute('data-escena');
+      escena.toggleAttribute('hidden', suyo !== elegido);
+    }
+  };
+  // Vigila mientras la pagina se lee. El aviso que llega con la pagina ya leida entera acomoda por ultima vez y deja
+  // de vigilar: de ahi en adelante las escenas son de quien monta el inicio.
+  const vigia = new MutationObserver(() => {
+    acomodar();
+    if (document.readyState !== 'loading') vigia.disconnect();
+  });
+  vigia.observe(raiz, { childList: true, subtree: true });
+  soltar = () => vigia.disconnect();
+
+  // Donde el corto va a correr solo (la misma pregunta que hacen los estilos y corto-vista.js: pantalla ancha, no muy
+  // bajita, con movimiento y sin ahorro de datos) su foto es lo mas grande de la pantalla: se pide desde ahora, y solo
+  // la del oficio elegido. Que archivos son (con un asterisco en el lugar del oficio) y cuanto mide la foto en la
+  // pantalla lo dice la etiqueta: lo mismo que dice la foto de cada escena.
+  const CORRE_SOLO =
+    '(min-width: 900px) and (min-aspect-ratio: 1/1) and (min-height: 480px) and (prefers-reduced-motion: no-preference)';
+  const fotos = etiqueta?.dataset.escena ?? '';
+  if (fotos && !ahorro && matchMedia(CORRE_SOLO).matches) {
+    const adelanto = document.createElement('link');
+    adelanto.setAttribute('rel', 'preload');
+    adelanto.setAttribute('as', 'image');
+    adelanto.setAttribute('type', 'image/avif');
+    adelanto.setAttribute('imagesrcset', fotos.replaceAll('*', elegido));
+    adelanto.setAttribute('imagesizes', etiqueta?.dataset.escenaMide ?? '100vw');
+    adelanto.setAttribute('fetchpriority', 'high');
+    document.head.append(adelanto);
+  }
+}
+
+let revisado = false;
+function revisar() {
+  if (revisado) return;
+  revisado = true;
+  soltar();
+  if (!document.querySelector('[data-demo][data-viva]')) raiz.classList.remove('con-js');
+  if (!document.querySelector('[data-corto][data-viva]')) raiz.classList.remove('con-corto');
+}
+
+document.addEventListener('pagina:montada', revisar);
+// Si pagina.js no llego (o trono antes de empezar) el aviso nunca vendra: entonces se revisa en cuanto el navegador
+// avisa de esa falla. La de un archivo que no llega se avisa en su etiqueta y no sube sola: por eso se escucha de
+// bajada. (Ver el OJO de arriba: no se espera a "load".)
+window.addEventListener(
+  'error',
+  (falla) => {
+    if (raiz.hasAttribute('data-arrancando')) return;
+    const origen = falla.filename || String(Reflect.get(falla.target ?? {}, 'src') ?? '');
+    if (/\/js\/pagina\.js$/.test(origen)) revisar();
+  },
+  true,
+);
